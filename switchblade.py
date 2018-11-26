@@ -47,7 +47,7 @@ class Switchblade:
 			except (socket.error, NetcatError):
 				print("recv machine broke.")
 
-	def send(self):
+	def send(self,cmd):
 		cmd = cmd+'\n'
 		self.nc.send(str.encode(cmd))
 
