@@ -64,7 +64,11 @@ class Cryptblade(Switchblade):
     def _crypt(self, msg, direction=False):
         if self.args.encrypt:
             # Should throw AttributeError on failure
-            msg = getattr(self, self.args.encrypt)(msg, decrypt=direction)
+            try:
+                msg = getattr(self, self.args.encrypt)(msg, decrypt=direction)
+            except AttributeError as e:
+                print("Encryption algorithm {} is not supported. Exiting.".format(self.args.encrypt))
+                self.exit("")
         return msg
 
     def encrypt(self, msg):
@@ -73,15 +77,15 @@ class Cryptblade(Switchblade):
         return self._crypt(msg, True)
 
     # Overrides Switchblade
-    def send(self,cmd): 
-        cmd = self.to_bytes(cmd+'\n') 
+    def _send(self,cmd): 
         cmd = self.encrypt(cmd)
         self.nc.send(cmd) 
  
     # Overrides Switchblade
-    def recv(self): 
-        msg = self.decrypt(super().recv())
-        #print(msg)
+    def _recv(self): 
+        msg = super()._recv()
+        if msg: 
+            return self.decrypt(msg)
         return msg
 
 if __name__=="__main__":
