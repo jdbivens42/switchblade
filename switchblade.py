@@ -57,7 +57,7 @@ class Switchblade:
         parser.add_argument('-b', '--bind', default="0.0.0.0", help="The address switchblade should bind to. Default is 0.0.0.0")
         parser.add_argument('-w', '--welcome_msg', help="A message (*cough* command *cough*) That should be sent to the remote machine upon connection. Can be combined with -f and -s")
         parser.add_argument('-f', '--welcome_file', help="A file containing commands that should be sent to the remote machine. Can be combined with -w and -s.")
-        parser.add_argument('-s', '--welcome_cmd', help="A shell command that should be executed locally upon connection. The output is sent to the remote machine. Can be combined with -w and -f." + 
+        parser.add_argument('-c', '--welcome_cmd', help="A shell command that should be executed locally upon connection. The output is sent to the remote machine. Can be combined with -w and -f." + 
                                                         "  Strings {RHOST} and {RPORT} in welcome_cmd will be replaced with the remote IP address and the remote port used by the client.")
         parser.add_argument('-u', '--udp', action="store_true", help="Use UDP instead of TCP. [NOT IMPLEMENTED]")
         parser.add_argument('--log_send', type=str, required=False, help="A filepath to log raw data sent.")

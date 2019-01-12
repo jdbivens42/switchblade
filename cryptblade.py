@@ -26,7 +26,7 @@ class Cryptblade(Switchblade):
 ###########################################################
 # RC4
 
-    def _rc4_setup(self, key):
+    def _rc4_setup(self, key, state):
         key = [ord(c) for c in key]
         S = list(range(256))
         j = 0
@@ -35,11 +35,11 @@ class Cryptblade(Switchblade):
             S[i], S[j] = S[j], S[i]
 
         # Store the current crypto state for later
-        self._crypto.update({'key':key, 'S':S, 'i':0, 'j':0})
+        state.update({'key':key, 'S':S, 'i':0, 'j':0})
 
-    def _rc4_prga(self):
+    def _rc4_prga(self, state):
         # Restore state of the crypto algorithm
-        S, i, j = [self._crypto[x] for x in ['S','i','j']]
+        S, i, j = [state[x] for x in ['S','i','j']]
         #print(S, i, j)
         while True:
             #print(S, i, j)
@@ -52,13 +52,20 @@ class Cryptblade(Switchblade):
 
     def rc4(self, msg, decrypt=False):
         if not hasattr(self, '_crypto'):
-            self._crypto = {}
-        if not 'rc4_prga' in self._crypto:
-            self._rc4_setup(self.args.key)
-            self._crypto['rc4_prga'] = self._rc4_prga()
+            self._crypto = {True:{}, False:{}}
+        # Maintain two keystream states, one for each direction.
+        # Use convention that DEcrypt direction uses the reverse of the key
+        #   to reduce key reuse. The peer must reverse the key for the ENcrypt direction
+        state = self._crypto[decrypt]
+        if not 'rc4_prga' in state:
+            key = self.args.key
+            if decrypt:
+                key = key[::-1]
+            self._rc4_setup(key, state)
+            state['rc4_prga'] = self._rc4_prga(state)
 
         msg = [ord(c) if not type(c) is int else c for c in msg]
-        return bytes(msgbyte ^ keybyte for msgbyte, keybyte in zip(msg, self._crypto['rc4_prga']))
+        return bytes(msgbyte ^ keybyte for msgbyte, keybyte in zip(msg, state['rc4_prga']))
         #return bytes(b"".join([chr(ord(msgbyte) ^ keybyte) for msgbyte, keybyte in zip(msg, prga())]))
 ###########################################################
     def _crypt(self, msg, direction=False):
