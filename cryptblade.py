@@ -86,7 +86,7 @@ class Cryptblade(Switchblade):
     # Overrides Switchblade
     def _send(self,cmd): 
         cmd = self.encrypt(cmd)
-        self.nc.send(cmd) 
+        super()._send(cmd) 
  
     # Overrides Switchblade
     def _recv(self): 
