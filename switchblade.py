@@ -17,6 +17,7 @@ import argparse
 
 import nclib
 from nclib.errors import NetcatError, NetcatTimeout
+import ssl
 
 import re
 
@@ -33,13 +34,16 @@ class Switchblade:
     def __init__(self, args):
         self.args = args
         self._init_args()
+        self._validate_args()
         self.args.transcript = os.path.realpath(os.path.expanduser(self.args.transcript))
         self.stats_dict = {
             "cmds_sent":0, 
             "data_sent":0,
             "data_recv":0,
             "connections":[],
-            "last_seen":None
+            "last_seen":None,
+            "last_cmd":None,
+            "last_cmd_t":None
         }
         if not self.args.no_banner:
             self.print_banner()
@@ -60,7 +64,11 @@ class Switchblade:
             raddr = self.get_raddr()
             self.args.welcome_cmd = self.args.welcome_cmd.replace('{RHOST}', raddr[0]).replace('{RPORT}', str(raddr[1]))
             self.run(shlex.split(self.args.welcome_cmd))
-
+        if self.args.exec:
+            self.args.exec = shlex.split(self.args.exec)
+            if self.args.verbosity > 0:
+                self.print_local("Spawning: {}".format(self.args.exec))
+            self.execute(self.args.exec)
 
     @staticmethod
     def get_parser():
@@ -70,6 +78,7 @@ class Switchblade:
         parser.add_argument('-f', '--welcome_file', help="A file containing commands that should be sent to the remote machine. Can be combined with -w and -s.")
         parser.add_argument('-c', '--welcome_cmd', help="A shell command that should be executed locally upon connection. The output is sent to the remote machine. Can be combined with -w and -f." + 
                                                         "  Strings {RHOST} and {RPORT} in welcome_cmd will be replaced with the remote IP address and the remote port used by the client.")
+        parser.add_argument('-e', '--exec', help="File / script to execute. Input and output are attached to socket (like classic nc).")
         parser.add_argument('-u', '--udp', action="store_true", help="Use UDP instead of TCP [EXPERIMENTAL].")
         parser.add_argument('-l', '--listen', action="store_true", help="Listen for connections.")
         parser.add_argument('--log_send', type=str, required=False, help="A filepath to log raw data sent.")
@@ -77,6 +86,12 @@ class Switchblade:
         parser.add_argument('-t', '--transcript', type=str, required=False, default=".transcript", help="A filepath to log all commands entered and final data printed to user.")
         parser.add_argument("-v", "--verbosity", default=0, action="count", help="Level of verbosity. Use -vv or -vvv for additional verbosity")
         parser.add_argument('--no_banner', action="store_true", required=False, help="Do not print the banner.")
+        parser.add_argument('--echo', action="store_true", required=False, help="Do not remove echo'd commands from reply output. (Many shells like bash -i echo back the command executed.)")
+
+        parser.add_argument('-s', '--ssl', action="store_true", required=False, help="Use SSL. Only applicable for TCP connections.")
+        parser.add_argument('--keyfile', default="key.pem", help="Key file to use for SSL")
+        parser.add_argument('--certfile', default="cert.pem", help="Cert file to use for SSL")
+        parser.add_argument('--keygen', action="store_true", help="Run an openssl command to generate --keyfile and --certfile")
 
         parser.add_argument('IP', nargs="?", help="The address switchblade should bind (or connect) to. Default is 0.0.0.0")
         parser.add_argument('PORT', type=int, nargs="?", help="The port to connect to, if not in listen mode.")
@@ -103,18 +118,108 @@ class Switchblade:
     def print_banner(self):
         self.print_local("""
 
-**********************************************************************************
-*     _____  _    _ _____ _____ _____  _   _ ______ _       ___ ______ _____     *
-*    /  ___|| |  | |_   _|_   _/  __ \| | | || ___ \ |     / _ \|  _  \  ___|    *
-*    \ `--. | |  | | | |   | | | /  \/| |_| || |_/ / |    / /_\ \ | | | |__      *
-*     `--. \| |/\| | | |   | | | |    |  _  || ___ \ |    |  _  | | | |  __|     *
-*    /\__/ /\  /\  /_| |_  | | | \__/\| | | || |_/ / |____| | | | |/ /| |___     *
-*    \____/  \/  \/ \___/  \_/  \____/\_| |_/\____/\_____/\_| |_/___/ \____/     *
-*                                                                                *
-**********************************************************************************
+*********************************************************************************************
+*                                                                                           *
+*   ███████╗██╗    ██╗██╗████████╗ ██████╗██╗  ██╗██████╗ ██╗      █████╗ ██████╗ ███████╗  *
+*   ██╔════╝██║    ██║██║╚══██╔══╝██╔════╝██║  ██║██╔══██╗██║     ██╔══██╗██╔══██╗██╔════╝  *
+*   ███████╗██║ █╗ ██║██║   ██║   ██║     ███████║██████╔╝██║     ███████║██║  ██║█████╗    *
+*   ╚════██║██║███╗██║██║   ██║   ██║     ██╔══██║██╔══██╗██║     ██╔══██║██║  ██║██╔══╝    *
+*   ███████║╚███╔███╔╝██║   ██║   ╚██████╗██║  ██║██████╔╝███████╗██║  ██║██████╔╝███████╗  *
+*   ╚══════╝ ╚══╝╚══╝ ╚═╝   ╚═╝    ╚═════╝╚═╝  ╚═╝╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝  *
+*                                                                                           *
+*********************************************************************************************
 
 """)
 
+#            {'cmd':'sessions',
+#             'desc':'Show all active sessions.',
+#             'usage':'{}sessions'.format(self.esc)
+#            }, 
+#            {'cmd':'interact',
+#             'desc':'Interact / attach to a particular session by ID.',
+#             'usage':'{}interact <Session ID>'.format(self.esc)
+#            }, 
+
+    def print_local(self, *args, **kwargs):
+        msg = " ".join(map(str,args))
+        if self.args.transcript:
+            self.log_transcript(msg, **kwargs)
+        print(msg, **kwargs)
+
+    def log_transcript(self, msg, **kwargs):
+        with open(self.args.transcript, "a") as t:
+            print("{0}{1}{0}".format("-"*15, time.asctime()), file=t)
+            print(msg, file=t, **kwargs)
+
+    def _init_args(self):
+        self.args.save = False 
+        self.args.save_started = False 
+        self.args.save_wait = False 
+        self.args.tee = False
+        self.args.save_file = None
+
+    def _validate_args(self):
+        assert not (self.args.ssl and self.args.udp), "--ssl is not compatible with --udp"
+        
+
+    def _init_ssl(self, sock=None, connect=None):
+        server_side = True
+        if not sock:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM, 0)
+            server_side = False
+        return ssl.wrap_socket (sock,
+                keyfile=self.args.keyfile,
+                certfile=self.args.certfile, server_side=server_side)
+        
+    def _init_nc(self):
+        if self.args.keygen:
+            os.system('openssl req -nodes -x509 -newkey rsa:4096 -keyout {} -out {} -days 365'.format(self.args.keyfile, self.args.certfile))
+        sock = None
+        if self.args.listen:
+            if not self.args.IP:
+                self.args.IP = "0.0.0.0"
+            if self.args.verbosity > 0:
+                self.print_local ("Listening on {}:{} ({})".format(self.args.IP, self.args.port, "UDP" if self.args.udp else "TCP"))
+            self.nc = nclib.Netcat(listen=(self.args.IP, self.args.port), retry=True, udp=self.args.udp, log_send=self.args.log_send, log_recv=self.args.log_recv)
+            if self.args.ssl:
+                self.nc.sock = self._init_ssl(sock=self.nc.sock)
+        else:
+            if self.args.verbosity > 0:
+                self.print_local ("Connecting to {}:{} ({})".format(self.args.IP, self.args.PORT, "UDP" if self.args.udp else "TCP"))
+            connect = (self.args.IP, self.args.PORT)
+            if self.args.ssl:
+                sock = self._init_ssl(connect=connect)
+                sock.connect(connect)
+            self.nc = nclib.Netcat(connect=connect, sock=sock, udp=self.args.udp, log_send=self.args.log_send, log_recv=self.args.log_recv)
+            
+        if self.args.verbosity > 0:
+            self.print_local("Connection: {}:{}".format(self.get_raddr()[0], self.get_raddr()[1]))
+        self.stats_dict["connections"].append(time.time())
+
+    def get_raddr(self):
+        return self.nc.sock.getpeername()
+ 
+    def set_prompt(self, prompt):
+        self.prompt_str = ansi_escape.sub('', prompt)
+
+    def execute(self, cmd):
+        with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as p:
+            self.nc.interact(outsock=p.stdin, insock=p.stdout)
+
+    def _help(self, d):
+        self.print_local('-'*80)
+        self.print_local("Command - {}".format(d['cmd']))
+        self.print_local('*'*60)
+        self.print_local(d['desc'])
+        self.print_local('*'*60)
+        self.print_local("Example Usage - \n\n{}".format(d['usage']))
+        self.print_local("")
+
+#############################################################################################
+#
+#                               Builtins
+#
+#############################################################################################
     def _setup_builtins(self):
         self.builtins = [
             {'cmd':'help',
@@ -128,14 +233,6 @@ class Switchblade:
             {'cmd':'source',
              'desc':'send the contents of a file on the local machine and send it to the remote client.',
              'usage':'{}send ~/cmds.list'.format(self.esc)
-            }, 
-            {'cmd':'sessions',
-             'desc':'Show all active sessions.',
-             'usage':'{}sessions'.format(self.esc)
-            }, 
-            {'cmd':'interact',
-             'desc':'Interact / attach to a particular session by ID.',
-             'usage':'{}interact <Session ID>'.format(self.esc)
             }, 
             {'cmd':'stats',
              'desc':'Print statistics about this session.',
@@ -165,66 +262,28 @@ class Switchblade:
              'usage':'{}stop_save /path/to/file'.format(self.esc)
             }, 
             {'cmd':'tee',
-             'desc':'Toggle tee mode. Default is False.' + 
-                    'If tee mode is on, save output (see save and start_save)' +
+             'desc':'Toggle tee mode. Default is False.\n' + 
+                    'If tee mode is on, save output (see save and start_save)\n' +
                     ' is also printed to the screen.',
-             'usage':'tee'.format(self.esc)
+             'usage':'{}tee'.format(self.esc)
+            }, 
+            {'cmd':'py',
+             'desc':'Execute raw python locally **with full access to Switchblades variables and scope**\n' +
+                    'You can send things to the client by calling self.send(str)\n' + 
+                    'Unlimited Powerrrrrrrrrrrrrrrrrrrrrrrrr!!!!!!!!!! (but obvs not safe)\n' +
+                    'If you do not need direct access to internal variables, {}run is more flexible.'.format(self.esc),
+             'usage':'{}py self.send("whoami)'.format(self.esc)
+            }, 
+            {'cmd':'reset',
+             'desc':'Reset the connection. Disconnects any existing client and restarts listener / reconnects',
+             'usage':'{}reset'.format(self.esc)
             }, 
             {'cmd':'exit',
-             'desc':'Exit switchblade. Use exit -y to kill all background sessions.',
-             'usage':'{0}exit\n{0}exit -y'.format(self.esc)
+             'desc':'Exit switchblade. Any client will be disconnected',
+             'usage':'{}exit'.format(self.esc)
             }, 
         ]
-
-    def print_local(self, *args, **kwargs):
-        msg = " ".join(map(str,args))
-        if self.args.transcript:
-            self.log_transcript(msg, **kwargs)
-        print(msg, **kwargs)
-
-    def log_transcript(self, msg, **kwargs):
-        with open(self.args.transcript, "a") as t:
-            print("{0}{1}{0}".format("-"*15, time.asctime()), file=t)
-            print(msg, file=t, **kwargs)
-
-    def _init_args(self):
-        self.args.save = False 
-        self.args.save_started = False 
-        self.args.save_wait = False 
-        self.args.tee = False
-        self.args.save_file = None
-
-    def _init_nc(self):
-        if self.args.listen:
-            if not self.args.IP:
-                self.args.IP = "0.0.0.0"
-            if self.args.verbosity > 0:
-                self.print_local ("Listening on {}:{} ({})".format(self.args.IP, self.args.port, "UDP" if self.args.udp else "TCP"))
-            self.nc = nclib.Netcat(listen=(self.args.IP, self.args.port), udp=self.args.udp, log_send=self.args.log_send, log_recv=self.args.log_recv)
-        else:
-            if self.args.verbosity > 0:
-                self.print_local ("Connecting to {}:{} ({})".format(self.args.IP, self.args.PORT, "UDP" if self.args.udp else "TCP"))
-            self.nc = nclib.Netcat(connect=(self.args.IP, self.args.PORT), udp=self.args.udp, log_send=self.args.log_send, log_recv=self.args.log_recv)
-            
-        if self.args.verbosity > 0:
-            self.print_local("Connection from: {}:{}".format(self.get_raddr()[0], self.get_raddr()[1]))
-        self.stats_dict["connections"].append(time.time())
-
-    def get_raddr(self):
-        return self.nc.sock.getpeername()
- 
-    def set_prompt(self, prompt):
-        self.prompt_str = ansi_escape.sub('', prompt)
-
-    def _help(self, d):
-        self.print_local('-'*80)
-        self.print_local("Command - {}".format(d['cmd']))
-        self.print_local('*'*60)
-        self.print_local(d['desc'])
-        self.print_local('*'*60)
-        self.print_local("Example Usage - \n\n{}".format(d['usage']))
-        self.print_local("")
-    def help(self, cmd):
+    def help(self, cmd, raw=None):
         if cmd:
             if type(cmd) is list:
                 cmd = cmd[0]
@@ -237,23 +296,17 @@ class Switchblade:
         for d in self.builtins:
             self._help(d)
 
-    def sessions(self, cmd):
-        self.print_local("Not implemented")
-
-    def source(self, cmd):
+    def source(self, cmd, raw=None):
         for filename in cmd:
             with open(filename, 'rb') as f:
                 if self.args.verbosity > 0:
                     self.print_local("Sending {}".format(filename))
                 self._send(f.read())
 
-    def interact(self, cmd):
-        self.print_local("Not implemented")
-
-    def stats(self, cmd):
+    def stats(self, cmd, raw=None):
         print("Client................ {}:{}".format(self.get_raddr()[0], self.get_raddr()[1]))
         if not self.stats_dict["last_seen"]:
-            print("Last Seen............. {}".format("never"))
+            print("Last Seen............. {}".format("(never)"))
         else:
             ago = time.strftime("%H:%M:%S", time.gmtime(time.time() - self.stats_dict["last_seen"]))
             last_seen = time.asctime(time.localtime(self.stats_dict["last_seen"]))
@@ -266,11 +319,19 @@ class Switchblade:
         print("Commands Sent......... {}".format(self.stats_dict["cmds_sent"]))
         print("Data Sent............. {}".format(self.format_size(self.stats_dict["data_sent"])))
         print("Data Received......... {}".format(self.format_size(self.stats_dict["data_recv"])))
+        print("Last Command............. {}".format(self.stats_dict["last_cmd"]))
 
-    def clear(self, cmd):
+        if not self.stats_dict["last_cmd_t"]:
+            print("Sent..................... {}".format("never"))
+        else:
+            ago = time.strftime("%H:%M:%S", time.gmtime(time.time() - self.stats_dict["last_cmd_t"]))
+            last_sent = time.asctime(time.localtime(self.stats_dict["last_cmd_t"]))
+            print("Sent..................... {} ({} ago)".format(last_seen, ago))
+
+    def clear(self, cmd, raw=None):
         prompt_toolkit.shortcuts.clear()        
 
-    def save(self, cmd):
+    def save(self, cmd, raw=None):
         self.args.save = True
         self.args.save_wait = False
         self.args.save_started = False
@@ -278,7 +339,7 @@ class Switchblade:
         with open(self.args.save_file, "w"):
             pass
          
-    def start_save(self, cmd):
+    def start_save(self, cmd, raw=None):
         self.args.save = True
         self.args.save_wait = False
         self.args.save_started = True
@@ -286,22 +347,46 @@ class Switchblade:
         with open(self.args.save_file, "w"):
             pass
 
-    def stop_save(self, cmd):
+    def stop_save(self, cmd, raw=None):
         self.args.save = False
         self.args.save_wait = False
         self.args.save_started = False
 
-    def tee(self, cmd):
+    def tee(self, cmd, raw=None):
         self.args.tee = not self.args.tee
         print("tee: {}".format(self.args.tee))
     
-    def bash(self, cmd):
-        cmd = subprocess.list2cmdline(cmd) 
-        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+    def bash(self, cmd, raw=None):
+        if selfs.args.verbosity > 0:
+           print("Running: {}".format(raw)) 
+        p = subprocess.run(raw, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
         print(p.stdout.decode())
-        
-    def run(self, cmd):
-        cmd = subprocess.list2cmdline(cmd) #' '.join([shlex.quote(c) for c in cmd])
+
+    def py(self, cmd, raw=None):
+        if self.args.verbosity > 0:
+           print("Running: {}".format(raw)) 
+        exec(raw, globals(), locals())
+
+    # TODO: Fix bug. Reset with UDP would be useful but does not work. 
+    def reset(self, cmd, raw=None):
+        try:
+            if self.args.verbosity > 0:
+                self.print_local("Resetting...")
+            self.nc.shutdown()
+            time.sleep(2)
+            if self.args.verbosity > 0:
+                print("Reinitializing...")
+            self._init_nc()
+            if self.args.exec:
+                self.execute(self.args.exec)
+ 
+        except Exception as e:
+            # Address already in use - seems safe to ignore
+            if not ("Errno 98" in e.args or "Errno 98" in str(e) ):
+                print(e)
+
+    def run(self, cmd, raw=None):
+        cmd = raw #cmd = subprocess.list2cmdline(cmd) #' '.join([shlex.quote(c) for c in cmd])
         if self.args.verbosity > 0:
             self.print_local("Running: {}".format(cmd))
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
@@ -316,9 +401,11 @@ class Switchblade:
                 self.print_local('-'*20)
             self.send(p.stdout, suffix=b'')
 
-    def exit(self, cmd):
+    def exit(self, cmd, raw=None):
         #TODO: Give a warning if there are background sessions
         os._exit(0)
+
+#############################################################################################
 
     def handle_builtin(self, cmd):
         # If it is a real command, call the right method
@@ -326,14 +413,14 @@ class Switchblade:
         try:
             split_cmd = shlex.split(cmd)
         except Exception as e:
-            print(e)
+            print(type(e), e)
             self.help(cmd)
             return
 
         #self.print_local("{} in {}?  {}".format(cmd, supported, cmd in supported)
         if split_cmd[0] in supported:
             try:
-                getattr(self, split_cmd[0])(split_cmd[1:])
+                getattr(self, split_cmd[0])(split_cmd[1:], raw=cmd[len(split_cmd[0])+1:])
             except Exception as e:
                 print(e)
                 self.help(split_cmd[0])
@@ -346,6 +433,8 @@ class Switchblade:
         if self.args.transcript:
             self.log_transcript(cmd)
         self.stats_dict["cmds_sent"] += 1
+        self.stats_dict["last_cmd"] = cmd
+        self.stats_dict["last_cmd_t"] = time.time()
         cmd = self.to_bytes(cmd+suffix)
         self._send(cmd)
 
@@ -378,7 +467,11 @@ class Switchblade:
 
                 if self.args.verbosity > 2: 
                     self.print_local("Received {} chars".format(len(msg)))
-
+                split = msg_str.split("\n", 1)
+                if not self.args.echo and len(split) > 1 and split[0].strip("\r") == self.stats_dict["last_cmd"]:
+                    if self.args.verbosity > 2: 
+                        self.print_local("Removing echo : {}".format(split[0].strip('\r')))
+                    msg_str = split[1]
                 if self.assume_prompt:
                     split = msg_str.rsplit("\n", 1)
                     if not self.prompt_suffix or split[-1].endswith(self.prompt_suffix):
@@ -404,11 +497,8 @@ class Switchblade:
                     self._init_nc()
             except Exception as e:
                 self.print_local("!!RECEIVE FAILED!!")
-                try:
-                    import traceback
-                    traceback.print_last()
-                except Exception:
-                    pass
+                import traceback
+                traceback.print_last()
 
     def listener(self):
         self.session = PromptSession()
@@ -424,12 +514,13 @@ class Switchblade:
                         if not self.prompt_str:
                             if self.args.verbosity > 1: 
                                 self.print_local("Waiting to receive prompt for RHOST...")
-                            time.sleep(1)
+                            time.sleep(0.25)
                             if not self.prompt_str:
                                 if self.args.verbosity > 1: 
                                     self.print_local("Using default prompt (#)")
                                 self.set_prompt('#')
-                                self.assume_prompt = False
+                                if self.stats_dict["cmds_sent"] > 0:
+                                    self.assume_prompt = False
                     cmd = self.session.prompt(str(self.prompt_str))
                     # A command has been entered
 

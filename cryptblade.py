@@ -7,6 +7,21 @@ import random
 class Cryptblade(Switchblade):
     #def __init__(self, args):
     #    super().__init__(args)
+    def print_banner(self):
+        self.print_local("""
+
+*********************************************************************************************
+*                                                                                           *
+*    ██████╗██████╗ ██╗   ██╗██████╗ ████████╗██████╗ ██╗      █████╗ ██████╗ ███████╗      *
+*    ██╔════╝██╔══██╗╚██╗ ██╔╝██╔══██╗╚══██╔══╝██╔══██╗██║     ██╔══██╗██╔══██╗██╔════╝     *
+*    ██║     ██████╔╝ ╚████╔╝ ██████╔╝   ██║   ██████╔╝██║     ███████║██║  ██║█████╗       *
+*    ██║     ██╔══██╗  ╚██╔╝  ██╔═══╝    ██║   ██╔══██╗██║     ██╔══██║██║  ██║██╔══╝       *
+*    ╚██████╗██║  ██║   ██║   ██║        ██║   ██████╔╝███████╗██║  ██║██████╔╝███████╗     *
+*     ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚═╝        ╚═╝   ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ ╚══════╝     *
+*                                                                                           *
+*********************************************************************************************
+                                                                                  
+""")
 
     @staticmethod
     def rand_key(size=32, use_digits=True):
@@ -18,7 +33,7 @@ class Cryptblade(Switchblade):
     @staticmethod
     def get_parser():
         parser = Switchblade.get_parser()
-        parser.add_argument('-e', '--encrypt', help="Encrypt / decrypt communications using this algorithm. Must be one of: [rc4]")
+        parser.add_argument('--encrypt', help="Encrypt / decrypt communications using this algorithm. Must be one of: [rc4]")
         parser.add_argument('-k', '--key', help="Encrypt communications using this key / keyfile (depending on the algoritm). Use with -e (--encrypt).")
 
         return parser
