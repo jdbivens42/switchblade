@@ -66,17 +66,20 @@ class Switchblade:
     def get_parser():
         parser = argparse.ArgumentParser(description='A smart handler to catch reverse shells from victim computers.')
         parser.add_argument('-p', '--port', default=443, type=int, required=False, help="The port on which switchblade will listen. The default is 443")
-        parser.add_argument('-b', '--bind', default="0.0.0.0", help="The address switchblade should bind to. Default is 0.0.0.0")
         parser.add_argument('-w', '--welcome_msg', help="A message (*cough* command *cough*) That should be sent to the remote machine upon connection. Can be combined with -f and -s")
         parser.add_argument('-f', '--welcome_file', help="A file containing commands that should be sent to the remote machine. Can be combined with -w and -s.")
         parser.add_argument('-c', '--welcome_cmd', help="A shell command that should be executed locally upon connection. The output is sent to the remote machine. Can be combined with -w and -f." + 
                                                         "  Strings {RHOST} and {RPORT} in welcome_cmd will be replaced with the remote IP address and the remote port used by the client.")
-        parser.add_argument('-u', '--udp', action="store_true", help="Use UDP instead of TCP. [NOT IMPLEMENTED]")
+        parser.add_argument('-u', '--udp', action="store_true", help="Use UDP instead of TCP [EXPERIMENTAL].")
+        parser.add_argument('-l', '--listen', action="store_true", help="Listen for connections.")
         parser.add_argument('--log_send', type=str, required=False, help="A filepath to log raw data sent.")
         parser.add_argument('--log_recv', type=str, required=False, help="A filepath to log raw data received.")
         parser.add_argument('-t', '--transcript', type=str, required=False, default=".transcript", help="A filepath to log all commands entered and final data printed to user.")
         parser.add_argument("-v", "--verbosity", default=0, action="count", help="Level of verbosity. Use -vv or -vvv for additional verbosity")
         parser.add_argument('--no_banner', action="store_true", required=False, help="Do not print the banner.")
+
+        parser.add_argument('IP', nargs="?", help="The address switchblade should bind (or connect) to. Default is 0.0.0.0")
+        parser.add_argument('PORT', type=int, nargs="?", help="The port to connect to, if not in listen mode.")
         return parser
 
     @staticmethod
@@ -189,12 +192,20 @@ class Switchblade:
         self.args.save_started = False 
         self.args.save_wait = False 
         self.args.tee = False
-        self.save_file = None
+        self.args.save_file = None
 
     def _init_nc(self):
-        if self.args.verbosity > 0:
-            self.print_local ("Listening on {}:{}".format(self.args.bind, self.args.port))
-        self.nc = nclib.Netcat(listen=(self.args.bind, self.args.port), log_send=self.args.log_send, log_recv=self.args.log_recv)
+        if self.args.listen:
+            if not self.args.IP:
+                self.args.IP = "0.0.0.0"
+            if self.args.verbosity > 0:
+                self.print_local ("Listening on {}:{} ({})".format(self.args.IP, self.args.port, "UDP" if self.args.udp else "TCP"))
+            self.nc = nclib.Netcat(listen=(self.args.IP, self.args.port), udp=self.args.udp, log_send=self.args.log_send, log_recv=self.args.log_recv)
+        else:
+            if self.args.verbosity > 0:
+                self.print_local ("Connecting to {}:{} ({})".format(self.args.IP, self.args.PORT, "UDP" if self.args.udp else "TCP"))
+            self.nc = nclib.Netcat(connect=(self.args.IP, self.args.PORT), udp=self.args.udp, log_send=self.args.log_send, log_recv=self.args.log_recv)
+            
         if self.args.verbosity > 0:
             self.print_local("Connection from: {}:{}".format(self.get_raddr()[0], self.get_raddr()[1]))
         self.stats_dict["connections"].append(time.time())
@@ -282,7 +293,7 @@ class Switchblade:
 
     def tee(self, cmd):
         self.args.tee = not self.args.tee
-        print("Tee: {}".format(self.args.tee))
+        print("tee: {}".format(self.args.tee))
     
     def bash(self, cmd):
         cmd = subprocess.list2cmdline(cmd) 
