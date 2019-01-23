@@ -31,11 +31,21 @@ ansi_escape = re.compile('\x1b[^m\x07]*[m\x07]')
 
 class Switchblade:
     
-    def __init__(self, args):
+    def __init__(self, args, wrap_sock=None):
         self.args = args
         self._init_args()
         self._validate_args()
         self.args.transcript = os.path.realpath(os.path.expanduser(self.args.transcript))
+
+        self.log_send_file = None
+        self.log_recv_file = None
+
+        if self.args.log_send:
+            self.log_send_file = open(self.args.log_send, 'wb')
+
+        if self.args.log_recv:
+            self.log_recv_file = open(self.args.log_recv, 'wb')
+
         self.stats_dict = {
             "cmds_sent":0, 
             "data_sent":0,
@@ -55,6 +65,11 @@ class Switchblade:
         self.prompt_suffix = "" # last 2 characters of the prompt, usually "# "
         self.esc = ":"
         self._setup_builtins()
+
+        # Socket must be wrapped before we start writing to it
+        if wrap_sock:
+            self._wrap_sock(wrap_sock)
+        
         if self.args.welcome_msg:
             self.send(self.args.welcome_msg)
         if self.args.welcome_file:
@@ -161,6 +176,10 @@ class Switchblade:
     def _validate_args(self):
         assert not (self.args.ssl and self.args.udp), "--ssl is not compatible with --udp"
         
+    def _wrap_sock(self, wrap_func):
+        if self.args.verbosity > 1:
+            print("Wrapping NC Socket...")
+        self.nc.sock = wrap_func(self.nc.sock)
 
     def _init_ssl(self, sock=None, connect=None):
         server_side = True
@@ -171,16 +190,20 @@ class Switchblade:
                 keyfile=self.args.keyfile,
                 certfile=self.args.certfile, server_side=server_side)
         
+    # Note - this is called on :reset, so don't mutate arguments
     def _init_nc(self):
         if self.args.keygen:
             os.system('openssl req -nodes -x509 -newkey rsa:4096 -keyout {} -out {} -days 365'.format(self.args.keyfile, self.args.certfile))
+
+
         sock = None
+        verbose = self.args.verbosity > 1
         if self.args.listen:
             if not self.args.IP:
                 self.args.IP = "0.0.0.0"
             if self.args.verbosity > 0:
                 self.print_local ("Listening on {}:{} ({})".format(self.args.IP, self.args.port, "UDP" if self.args.udp else "TCP"))
-            self.nc = nclib.Netcat(listen=(self.args.IP, self.args.port), retry=True, udp=self.args.udp, log_send=self.args.log_send, log_recv=self.args.log_recv)
+            self.nc = nclib.Netcat(listen=(self.args.IP, self.args.port), retry=True, udp=self.args.udp, verbose=verbose, log_send=self.log_send_file, log_recv=self.log_recv_file)
             if self.args.ssl:
                 self.nc.sock = self._init_ssl(sock=self.nc.sock)
         else:
@@ -190,7 +213,7 @@ class Switchblade:
             if self.args.ssl:
                 sock = self._init_ssl(connect=connect)
                 sock.connect(connect)
-            self.nc = nclib.Netcat(connect=connect, sock=sock, udp=self.args.udp, log_send=self.args.log_send, log_recv=self.args.log_recv)
+            self.nc = nclib.Netcat(connect=connect, sock=sock, udp=self.args.udp, verbose=verbose, log_send=self.log_send_file, log_recv=self.log_recv_file)
             
         if self.args.verbosity > 0:
             self.print_local("Connection: {}:{}".format(self.get_raddr()[0], self.get_raddr()[1]))
@@ -386,7 +409,8 @@ class Switchblade:
                 print(e)
 
     def run(self, cmd, raw=None):
-        cmd = raw #cmd = subprocess.list2cmdline(cmd) #' '.join([shlex.quote(c) for c in cmd])
+        if raw:
+            cmd = raw #cmd = subprocess.list2cmdline(cmd) #' '.join([shlex.quote(c) for c in cmd])
         if self.args.verbosity > 0:
             self.print_local("Running: {}".format(cmd))
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
@@ -402,6 +426,10 @@ class Switchblade:
             self.send(p.stdout, suffix=b'')
 
     def exit(self, cmd, raw=None):
+        try:
+            self.nc.shutdown()
+        except Exception as e:
+            pass
         #TODO: Give a warning if there are background sessions
         os._exit(0)
 
