@@ -257,46 +257,48 @@ if __name__=="__main__":
     args = parser.parse_args()
     supported = ['rc4', 'b64', 'b64_url', 'aes']
     assert not bool(args.server_key) != bool(args.client_key), "Either use just --key or both --client_key and --server_key"
-    assert bool(args.key) != bool(args.server_key or args.client_key), "Either use just --key or both --client_key and --server_key"
+    if args.key:
+        assert not bool(args.server_key or args.client_key), "Either use just --key or both --client_key and --server_key"
 
     #TODO add validation that checks that keys are present when necessary
     cryptors = []
-    for alg in  args.encrypt:
-        if alg not in supported:
-            Exception('Encryption algorithm {} not available. Try one of {}'.format(args.encrypt, supported))
+    if args.encrypt:
+        for alg in args.encrypt:
+            if alg not in supported:
+                Exception('Encryption algorithm {} not available. Try one of {}'.format(args.encrypt, supported))
 
-        # assertions mean that if this is true, then only args.key is set
-        if args.key:
-            args.server_key = args.key
-            args.client_key = args.key[::-1]
-                
-            if not args.listen:
-                # every client internally things it is a server, but when we run the command, we want
-                # the --server_key and --client_key args to match on both boxes
-                args.server_key, args.client_key = args.client_key, args.server_key
-        # now server_key and client_key are set
+            # assertions mean that if this is true, then only args.key is set
+            if args.key:
+                args.server_key = args.key
+                args.client_key = args.key[::-1]
+                    
+                if not args.listen:
+                    # every client internally things it is a server, but when we run the command, we want
+                    # the --server_key and --client_key args to match on both boxes
+                    args.server_key, args.client_key = args.client_key, args.server_key
+            # now server_key and client_key are set
 
-        # things that don't take keyfiles
-        if alg in ['rc4', 'aes']:
-            assert args.server_key and args.client_key, "Keys are required for {}".format(alg)
-            if len(args.server_key) < 32:
-                args.server_key = hashlib.sha256(args.server_key.encode()).digest()
-            if len(args.client_key) < 32:
-                args.client_key = hashlib.sha256(args.client_key.encode()).digest()
+            # things that don't take keyfiles
+            if alg in ['rc4', 'aes']:
+                assert args.server_key and args.client_key, "Keys are required for {}".format(alg)
+                if len(args.server_key) < 32:
+                    args.server_key = hashlib.sha256(args.server_key.encode()).digest()
+                if len(args.client_key) < 32:
+                    args.client_key = hashlib.sha256(args.client_key.encode()).digest()
 
-        cryptor = None        
-        if alg == "rc4":
-            cryptor = RC4Crypt(local_key=args.server_key, remote_key=args.client_key)
-        elif alg == "b64":
-            cryptor = B64Encode(urlsafe=False)
-        elif alg == "b64_url":
-            cryptor = B64Encode(urlsafe=True)
-        elif alg == "aes":
-            cryptor = AESCrypt(local_key=args.server_key, remote_key=args.client_key)
+            cryptor = None        
+            if alg == "rc4":
+                cryptor = RC4Crypt(local_key=args.server_key, remote_key=args.client_key)
+            elif alg == "b64":
+                cryptor = B64Encode(urlsafe=False)
+            elif alg == "b64_url":
+                cryptor = B64Encode(urlsafe=True)
+            elif alg == "aes":
+                cryptor = AESCrypt(local_key=args.server_key, remote_key=args.client_key)
 
-        if not cryptor:
-            raise Exception("Failed to get a Cryptor for {}".format(alg))
-        cryptors.append(cryptor)
+            if not cryptor:
+                raise Exception("Failed to get a Cryptor for {}".format(alg))
+            cryptors.append(cryptor)
     sb = Cryptblade(args, wrap_sock=get_socket_wrapper(args, cryptors=cryptors))
     sb.listener()
 
