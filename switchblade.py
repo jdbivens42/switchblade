@@ -26,7 +26,7 @@ import subprocess
 
 import time
 
-ansi_escape = re.compile('\x1b[^m\x07]*[m\x07]')
+ansi_escape = [re.compile('\x1b[^m\x07]*[m\x07]'), re.compile('.*?\x07')]
 
 
 class Switchblade:
@@ -223,7 +223,10 @@ class Switchblade:
         return self.nc.sock.getpeername()
  
     def set_prompt(self, prompt):
-        self.prompt_str = ansi_escape.sub('', prompt)
+        for r in ansi_escape:
+            prompt = r.sub('', prompt)
+        self.prompt_str = prompt
+        #self.print_local("Setting prompt to {}".format(self.prompt_str.encode()))
 
     def execute(self, cmd):
         with subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as p:
@@ -549,6 +552,7 @@ class Switchblade:
                                 self.set_prompt('#')
                                 if self.stats_dict["cmds_sent"] > 0:
                                     self.assume_prompt = False
+                    #self.print_local("\nUsing prompt: {}\n".format(self.prompt_str.encode()))
                     cmd = self.session.prompt(str(self.prompt_str))
                     # A command has been entered
 
